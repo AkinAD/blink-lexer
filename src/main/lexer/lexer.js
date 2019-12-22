@@ -7,9 +7,11 @@ import { TokenType } from './tokentype'
 export class Lexer {
     constructor(input) {
         this.input = input;
+        this.inputSize = input.length;
         this.position = 0;
         this.line = 0;
         this.column = 0;
+        this.buffer = [];
     }
 
     tokenize() {
@@ -26,34 +28,52 @@ export class Lexer {
 
     nextToken() {
         // TODO: Write your code here. :)
-        if (this.position >= this.input.length)
-        {
-          return new Token(TokenType.EndOfInput);
-        }
+      }
 
-        this.skipWhitespacesAndNewLines();
+    lookahead() {
+       var token = this.readToken();
+       this.buffer.push(token);
+       return token;
 
-        let character = this.input.charAt(this.position);
+    }
 
-        if (CharUtils.isLetter(character)){
-          return this.recognizeIdentifier();
-        }
+    readToken() {
+      this.skipWhitespacesAndNewLines();
+      let character = this.input.charAt(this.position);
 
-        if (CharUtils.isDigit(character)){
-          return this.recognizeNumber();
-        }
+      if (this.position >= this.inputSize)
+      {
+        return new Token(TokenType.EndOfInput);
+      }
 
-        if (CharUtils.isOperator(character)){
-          return this.recognizeOperator();
-        }
+      if (CharUtils.isBeginningOfLiteral(character)) {
+         return this.recognizeLiteral();
+      }
 
-        if (CharUtils.isParenthesis(character)) {
-           return this.recognizeParenthesis();
-       }
+      if (CharUtils.isOperator(character)){
+        return this.recognizeOperator();
+      }
 
-       // Throw an error if the current character does not match
-       // any production rule of the lexical grammar.
-       throw new Error('Unrecognized character ${character} at line ${this.line} and column ${this.column}.');
+      if (CharUtils.isDelimiter(character)) {
+        return this.recognizeDelimiter();
+      }
+
+      if (CharUtils.isLetter(character)){
+        return this.recognizeIdentifier();
+      }
+
+      if (CharUtils.isDigit(character)){
+        return this.recognizeNumber();
+      }
+
+      if (CharUtils.isParenthesis(character)) {
+         return this.recognizeParenthesis();
+     }
+
+     // Throw an error if the current character does not match
+     // any production rule of the lexical grammar.
+     throw new Error('Unrecognized character ${character} at line ${this.line} and column ${this.column}.');
+
     }
     skipWhitespacesAndNewLines() {
       while (this.position < this.input.length && CharUtils.isWhitespaceOrNewLine(this.input.charAt(this.position))) {
