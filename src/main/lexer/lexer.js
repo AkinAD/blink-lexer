@@ -38,7 +38,7 @@ export class Lexer {
     }
 
     readToken() {
-      this.skipWhitespacesAndNewLines();
+      this.skipWhitespaces();
       let character = this.input.charAt(this.position);
 
       if (this.position >= this.inputSize)
@@ -58,6 +58,26 @@ export class Lexer {
         return this.recognizeDelimiter();
       }
 
+      if (CharUtils.isDot(character)){
+        let column = this.column;
+
+        this.position++;
+        this.column++;
+
+        return new Token(TokenType.Dot, '.', this.line, column);
+      }
+
+      if (CharUtils.isNewLine(character)){
+         let column = this.column;
+         let line = this.line;
+
+         this.position++;
+         this.column++;
+         this.column = 0;
+
+         return new Token(TokenType.Newline, '\n', line, column);
+      }
+
       if (CharUtils.isLetter(character)){
         return this.recognizeIdentifier();
       }
@@ -72,11 +92,12 @@ export class Lexer {
 
      // Throw an error if the current character does not match
      // any production rule of the lexical grammar.
-     throw new Error('Unrecognized character ${character} at line ${this.line} and column ${this.column}.');
+     // throw new Error('Unrecognized character ${character} at line ${this.line} and column ${this.column}.');
+     throw new Error(Report.error(this.line, this.column, `Unrecognized token '${symbol}'.`));
 
     }
     skipWhitespacesAndNewLines() {
-      while (this.position < this.input.length && CharUtils.isWhitespaceOrNewLine(this.input.charAt(this.position))) {
+      while (this.position < this.inputSize && CharUtils.isWhitespaceOrNewLine(this.input.charAt(this.position))) {
         this.position += 1;
 
         if (CharUtils.isNewLine(this.input.charAt(this.position))) {
@@ -89,25 +110,73 @@ export class Lexer {
       }
     }
 
+    recognizeLiteral() {
+      let character = this.input.charAt(this.position);
+
+      if (CharUtils.isLetter(character)){
+          return this.recognizeKeywordOrIdentifier();
+      }
+
+      if (CharUtils.isBeginningOfIdentifier(character)){
+          return this.recognizeIdentifier();
+      }
+
+      if (CharUtils.isBeginningOfNumber(character)){
+          return this.recognizeNumber();
+      }
+
+      if (CharUtils.isBeginningOfString(character)){
+          return this.recognizeString();
+      }
+
+      throw new Error(Report.error(this.line, this.column, `Unrecognized token '${symbol}'.`));
+    }
+
+    //Recognizes AND RETURNS KEYQORD OR IDENTIFIER tokens
+    recognizeKeywordOrIdentifier(){
+      let token =  this.recognizeKeyword();
+      return token !== null ? token : this.recognizeIdentifier();  // return keyword token  if its a keyword and if it is not ( null) then return identifier token
+
+    }
+
+    recognizeKeyword(){
+      let character = this.input.charAt(this.position);
+
+      let keywords =  Object.keys(TokenType).filter(key => TokenType[key].charAt(0) === character)
+
+      for(let i in keywords) {
+         let keyword = keywords[i];
+
+         let token = this.recognizeToken(TokenType[keyword]);
+
+         if (token !== null) {
+            let offset = token.value.length;
+
+            if(CharUtils.isIdentifierPart(this.input.charAt(this.position + offset))){
+              return null;
+            }
+
+            this.potition += offset;
+            this.column += offset;
+         }
+      }
+      return null;
+    }
     /// Recognizes and returns an identifier token.
    recognizeIdentifier() {
      let identifier = '';
-     let line = this.line;
      let column = this.column;
-     let position = this.position;
 
      while (position < this.input.length) {
          let character = this.input.charAt(position);
 
-         if (!(CharUtils.isLetter(character) || CharUtils.isDigit(character) || character === '-')) {
+         if (!(CharUtils.isIdentifierPart(character)) {
            break;
          }
 
          identifier += character;
          position += 1;
      }
-
-     this.position += identifier.length;
      this.column += identifier.length;
 
      return new Token(TokenType.Identifier, identifier, line, column);
@@ -116,221 +185,359 @@ export class Lexer {
    /// Recognizes and returns a number token.
    /// Recognizes and returns a number token.
  recognizeNumber() {
-     let line = this.line;
-     let column = this.column;
-
      // We delegate the building of the FSM to a helper method.
-     let fsm = this.buildNumberRecognizer();
+     let recognizer = this.buildNumberRecognizer();
+     let { recognized, value } = recognizer.run(this.input.substring(this.position));
 
-     // The input to the FSM will be all the characters from
-     // the current position to the rest of the lexer's input.
-     let fsmInput = this.input.substring(this.position);
-
-     // Here, in addition of the FSM returning whether a number
-     // has been recognized or not, it also returns the number
-     // recognized in the 'number' variable. If no number has
-     // been recognized, 'number' will be 'null'.
-     let { isNumberRecognized, number } = fsm.run(fsmInput);
-
-     if (isNumberRecognized) {
-         this.position += number.length;
-         this.column += number.length;
-
-         return new Token(TokenType.Number, number, line, column);
+     if(!recognized){
+       throw new Error(Report.error(this.line, this.column, 'Unrecognized number literal.'));
      }
 
-     // ...
+     if(this.input.charAt(this.position) === '.' && value === '.') {
+       this.position++;
+       this.column++;
+
+       return new Token(TokenType.Dot, '.', this.line, this.column - 1)
+     }
+     let offset = value.length;
+
+     if(value.charAt(offset - 1) === '.'){
+        value = value.substring(0, offset - 1);
+        offset--;
+     }
+     let column = this.column;
+
+     this.position +=  offset;
+     this.column += offset;
+
+     return new Token(value.includes('.') || value.includes('e') || value.includes('E') ? TokenType.Decimal : TokenType.Integer, value, this.line, column);
  }
 
- buildNumberRecognizer() {
-     // We name our states for readability.
-     let State = {
-         Initial: 1,
-         Integer: 2,
-         BeginNumberWithFractionalPart: 3,
-         NumberWithFractionalPart: 4,
-         BeginNumberWithExponent: 5,
-         BeginNumberWithSignedExponent: 6,
-         NumberWithExponent: 7,
-         NoNextState: -1
-     };
+recognizeString() {
+ let recognizer = this.buildStringRecognizer();
+ let { recognized, value } = recognizer.run(this.input.substring(this.position));
 
-     let fsm = new FSM()
-     fsm.states = new Set([State.Initial, State.Integer, State.BeginNumberWithFractionalPart, State.NumberWithFractionalPart, /* ... */]);
-     fsm.initialState = State.Initial;
-     fsm.acceptingStates = new Set([State.Integer, State.NumberWithFractionalPart, State.NumberWithExponent]);
-     fsm.nextState = (currentState, character) => {
-         switch (currentState) {
-             case State.Initial:
-                 if (CharUtils.isDigit(character)) {
-                     return State.Integer;
-                 }
-
-                 break;
-
-             case State.Integer:
-                 if (CharUtils.isDigit(character)) {
-                     return State.Integer;
-                 }
-
-                 if (character === '.') {
-                     return State.BeginNumberWithFractionalPart;
-                 }
-
-                 if (character.toLowerCase() === 'e') {
-                     return State.BeginNumberWithExponent;
-                 }
-
-                 break;
-
-             case State.BeginNumberWithFractionalPart:
-                 if (CharUtils.isDigit(character)) {
-                     return State.NumberWithFractionalPart;
-                 }
-
-                 break;
-
-             case State.NumberWithFractionalPart:
-                 if (CharUtils.isDigit(character)) {
-                     return State.NumberWithFractionalPart;
-                 }
-
-                 if (character.toLowerCase() === 'e') {
-                     return State.BeginNumberWithExponent;
-                 }
-
-                 break;
-
-             case State.BeginNumberWithExponent:
-                 if (character === '+' || character === '-'){
-                     return State.BeginNumberWithSignedExponent;
-                 }
-
-                 if (CharUtils.isDigit()) {
-                     return State.NumberWithExponent;
-                 }
-
-                 break;
-
-             case State.BeginNumberWithSignedExponent:
-                 if (CharUtils.isDigit()) {
-                     return State.NumberWithExponent;
-                 }
-
-                 break;
-
-             default:
-                 break;
-         }
-
-         return State.NoNextState;
-     };
-
-     return fsm;
+ if (!recognized)
+ {
+   throw new Error(Report.error(this.line, this.column, 'Invalid string literal.'));
  }
+ let offset = value.length;
+ let column = this.column;
+
+ this.position += offset;
+ this.column += offset;
+
+ return new Token(TokenType.String, value, this.line, column);
+}
+
+recognizeToken(token) {
+  let length = token.length;
+
+  for(let i = 0;; i < length; ++i){
+    if (this.input.charAt(this.position + i) !== token.charAt(i)){
+      return null;
+    }
+  }
+  return new Token(token, token, this.line, this.column);
+
+}
+
+recognizeDelimiter() {
+  let character = this.input.charAt(this.position);
+  let column = this.column;
+
+  this.position++;
+  this.column++;
+  switch (symbol) {
+            case '{':
+                return new Token(TokenType.LeftBrace, '{', this.line, column);
+
+            case '}':
+                return new Token(TokenType.RightBrace, '}', this.line, column);
+
+            case '[':
+                return new Token(TokenType.LeftBracket, '[', this.line, column);
+
+            case ']':
+                return new Token(TokenType.RightBracket, ']', this.line, column);
+
+            case '(':
+                return new Token(TokenType.LeftParen, '(', this.line, column);
+
+            case ')':
+                return new Token(TokenType.RightParen, ')', this.line, column);
+
+            case ',':
+                return new Token(TokenType.Comma, ',', this.line, column);
+
+            case ':':
+                return new Token(TokenType.Colon, ':', this.line, column);
+
+            default:
+                throw new Error(Report.error(this.line, this.column, `Unrecognized token '${symbol}'.`));
+        }
+}
 
    /// Recognizes and returns an operator token.
    recognizeOperator() {
    let character = this.input.charAt(this.position);
-
-   if (CharUtils.isComparisonOperator(character)) {
-       return recognizeComparisonOperator();
-   }
-
-   if (CharUtils.isArithmeticOperator(operator)) {
-       return recognizeArithmeticOperator();
-   }
-
-   // ...
-}
-
-recognizeComparisonOperator() {
-   let position = this.position;
-   let line = this.line;
-   let column = this.column;
-   let character = this.input.charAt(position);
-
    // 'lookahead' is the next character in the input
    // or 'null' if 'character' was the last character.
    let lookahead = position + 1 < this.input.length ? this.input.charAt(position + 1) : null;
-
-   // Whether the 'lookahead' character is the equal symbol '='.
-   let isLookaheadEqualSymbol = lookahead !== null && lookahead === '=';
-
-   this.position += 1;
-   this.column += 1;
-
-   if (isLookaheadEqualSymbol) {
-       this.position += 1;
-       this.column += 1;
-   }
-
-   switch (character) {
-       case '>':
-           return isLookaheadEqualSymbol
-               ? new Token(TokenType.GreaterThanOrEqual, '>=', line, column)
-               : new Token(TokenType.GreaterThan, '>', line, column);
-
-       case '<':
-           return isLookaheadEqualSymbol
-               ? new Token(TokenType.LessThanOrEqual, '<=', line, column)
-               : new Token(TokenType.LessThan, '<', line, column);
-
-       case '=':
-           return isLookaheadEqualSymbol
-               ? new Token(TokenType.Equal, '==', line, column)
-               : new Token(TokenType.Assign, '=', line, column);
-
-       default:
-           break;
-   }
-
-   // ...
-}
-
-recognizeArithmeticOperator() {
-   let position = this.position;
-   let line = this.line;
    let column = this.column;
-   let character = this.input.charAt(position);
 
-   this.position += 1;
-   this.column += 1;
-
-   switch (character) {
-       case '+':
-           return new Token(TokenType.Plus, '+', line, column);
-
-       case '-':
-           return new Token(TokenType.Minus, '-', line, column);
-
-       case '*':
-           return new Token(TokenType.Times, '*', line, column);
-
-       case '/':
-           return new Token(TokenType.Div, '/', line, column);
+   if (lookahead !== null && (lookahead === '=' || lookahead === '&' || lookahead === '|' || lookahead === '-')) {
+     this.position++;
+     this.column++;
    }
+   this.position++;
+   this.column++;
+   let isLookaheadEqualSymbol = lookahead !== null && lookahead === '=';
+   switch (symbol) {
+        case '=':
+            return isLookaheadEqualSymbol
+                ? new Token(TokenType.DoubleEqual, '==', this.line, column)
+                : new Token(TokenType.Equal, '=', this.line, column);
+        case '%':
+            return isLookaheadEqualSymbol
+                  ? new Token(TokenType.ModuloEqual, '%=', this.line, column)
+                  : new Token(TokenType.Modulo, '%', this.line, column);
+        case '*':
+            return isLookaheadEqualSymbol
+                  ? new Token(TokenType.TimesEqual, '*=', this.line, column)
+                  : new Token(TokenType.Times, '*', this.line, column);
+        case '+':
+            return isLookaheadEqualSymbol
+                  ? new Token(TokenType.PlusEqual, '+=', this.line, column)
+                  : new Token(TokenType.Plus, '+', this.line, column);
+        case '!':
+            return isLookaheadEqualSymbol
+                  ? new Token(TokenType.NotEqual, '!=', this.line, column)
+                  : new Token(TokenType.Not, '!', this.line, column);
+        case '~':
+            return isLookaheadEqualSymbol
+                  ? new Token(TokenType.TildeEqual, '~=', this.line, column)
+                  : new Token(TokenType.Tilde, '~', this.line, column);
+        case '$':
+            return isLookaheadEqualSymbol
+                  ? new Token(TokenType.DollarEqual, '$=', this.line, column)
+                  : new Token(TokenType.Dollar, '$', this.line, column);
+        case '^':
+            return isLookaheadEqualSymbol
+                  ? new Token(TokenType.CaretEqual, '~=', this.line, column)
+                  : new Token(TokenType.Caret, '~', this.line, column);
+        case '&':
+            if (lookahead !== null && lookahead === '&') {
+                    return new Token(TokenType.And, '&&', this.line, column);
+                }
+          case '|':
+            if (lookahead !== null && lookahead === '|') {
+                    return new Token(TokenType.And, '||', this.line, column);
+                }
+          case '/':
+            if (lookahead !== '=' && lookahead !== '/') {
+                    return new Token(TokenType.Div, '/', this.line, column);
+                }
+            if (lookahead === '='){
+                    return new Token(TokenType.DivEqual, '/=', this.line, column);
+                }
+            if (lookahead === '/'){
+                  this.skipUntilNewline();
 
-   // ...
+                  return this.nextToken();
+                }
+                break;
+        case '>':
+              return lookahead !== null && lookahead === '='
+                  ? new Token(TokenType.GreaterOrEqual, '>=', this.line, column)
+                  : new Token(TokenType.Greater, '>', this.line, column);
+        case '<':
+            if (lookahead !== '=' && lookahead !== '-') {
+              return new Token(TokenType.Less, '<', this.line, column);
+            }
+
+            if (lookahead === '=') {
+                return new Token(TokenType.LessOrEqual, '<=', this.line, column);
+            }
+
+            if (lookahead === '-') {
+                return new Token(TokenType.LeftArrow, '<-', this.line, column);
+            }
+
+            break;
+
+        case '-' :
+            if(lookahead == null || (lookahead !== '=' && lookahead !== '>'))
+            {
+                return new Token(TokenType.Minus, '-', this.line, column);
+            }
+            if (lookahead === '=')
+            {
+                return new Token(TokenType.MinusEqual, '-=', this.line, column);
+            }
+            if (lookahead === '>')
+            {
+              return new Token(TokenType.RightArrow, '->', this.line, column)
+            }
+            throw new Error(Report.error(this.line, this.column, `Unrecognized token '${symbol}'.`));
+
+        default:
+            throw new Error(Report.error(this.line, this.column, `Unrecognized token '${symbol}'.`));
+    }
+}
+buildStringRecognizer(){
+  let recognizer =  new Fsm();
+  recognizer.states =  new Set(['Start', 'StartString', 'Character', 'Backslash', 'EscapeSequence', 'EndString']);
+
+  recognizer.startState = 'Start';
+  recognizer.finalStaes = new Set(['EndString']);
+
+  recognizer.transition = (state, symbol )=> {
+    switch(state){
+      case 'Start':
+        if (CharUtils.isStringDelimiter(symbol)) {
+          return 'StartString'
+        }
+        break;
+      case 'StartString':
+      case 'Character':
+        if (CharUtils.isStringDelimiter(symbol)) {
+          return 'EndString';
+        }
+
+        if (CharUtils.isEscapeCharacter(symbol)) {
+          return 'Backslash';
+        }
+
+        return 'Character';
+      case 'Backslash':
+        if(CharUtils.isEndofEscapeCharacter(symbol)){
+          return 'EscapeSequence';
+        }
+        break;
+      case 'EscapeSequence':
+        if(CharUtils.isStirngDelimiter(symbol))
+        {
+          return 'EndString';
+        }
+        if (CharUtils.isEscapeCharacter(symbol))
+        {
+          return 'Backslash';
+        }
+        return 'character'
+      default:
+        break;
+    }
+    return InvalidFsmState;
+  };
+  return recognizer;
 }
 
+buildNumberRecognizer() {
+        let recognizer = new Fsm();
 
-   /// Recognizes and returns a parenthesis token.
-   recognizeParenthesis() {
-       /// Recognizes and returns a parenthesis token.
-     let position = this.position;
-     let line = this.line;
-     let column = this.column;
-     let character = this.input.charAt(position);
+        recognizer.states = new Set(['Start', 'Zero', 'Integer', 'StartDecimal', 'Decimal', 'StartExponentNotation', 'NumberInExponentNotation', 'End']);
 
-     this.position += 1;
-     this.column += 1;
+        recognizer.startState = 'Start';
 
-     if (character === '(') {
-         return new Token(TokenType.LeftParenthesis, '(', line, column);
-     }
+        recognizer.finalStates = new Set(['Zero', 'Integer', 'StartDecimal', 'Decimal', 'NumberInExponentNotation', 'End']);
 
-     return new Token(TokenType.RightParenthesis, ')', line, column);
+        recognizer.transition = (state, symbol) => {
+            switch (state) {
+                case 'Start':
+                    if (symbol === '0') {
+                        return 'Zero';
+                    }
 
-   }
+                    if (symbol === '.') {
+                        return 'StartDecimal';
+                    }
+
+                    if (CharUtils.isDigit(symbol)) {
+                        return 'Integer';
+                    }
+
+                    break;
+
+                case 'Zero':
+                    if (CharUtils.isExponentSymbol(symbol)) {
+                        return 'StartExponentNotation';
+                    }
+
+                    if (symbol == '.') {
+                        return 'StartDecimal';
+                    }
+
+                    break;
+
+                case 'Integer':
+                    if (CharUtils.isDigit(symbol)) {
+                        return 'Integer';
+                    }
+
+                    if (CharUtils.isExponentSymbol(symbol)) {
+                        return 'StartExponentNotation';
+                    }
+
+                    if (symbol == '.') {
+                        return 'StartDecimal';
+                    }
+
+                    break;
+
+                case 'StartDecimal':
+                    if (CharUtils.isDigit(symbol)) {
+                        return 'Decimal';
+                    }
+
+                    return InvalidFsmState;
+
+                case 'StartExponentNotation':
+                    if (CharUtils.isDigit(symbol) || symbol === '-') {
+                        return 'NumberInExponentNotation';
+                    }
+
+                    break;
+
+                case 'Decimal':
+                    if (CharUtils.isDigit(symbol)) {
+                        return 'Decimal';
+                    }
+
+                    if (CharUtils.isExponentSymbol(symbol)) {
+                        return 'StartExponentNotation';
+                    }
+
+                    break;
+
+                case 'NumberInExponentNotation':
+                    if (CharUtils.isDigit(symbol)) {
+                        return 'NumberInExponentNotation';
+                    }
+
+                    break;
+
+                default:
+                    break;
+            }
+
+            return InvalidFsmState;
+        };
+
+        return recognizer;
+    }
+    
+   skipWhitespaces() {
+        while (this.position < this.inputSize && CharUtils.isWhitespace(this.input.charAt(this.position))) {
+            this.position++;
+            this.column++;
+        }
+    }
+
+    skipUntilNewline() {
+        while (this.position < this.inputSize && !CharUtils.isNewline(this.input.charAt(this.position))) {
+            this.position++;
+            this.column++;
+        }
+    }
 }
